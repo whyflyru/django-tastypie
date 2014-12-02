@@ -751,16 +751,15 @@ class TestPutOnRelatedResource(TestCaseWithFixture):
         request.method = 'PUT'
         forum = Forum.objects.create()
         user_data_1 = {
-            'username': 'valid but unique',
+            'username': 'u1: valid but unique',
             'email': 'valid.unique@exmaple.com',
             'password': 'junk',
             }
         user_data_2 = {
-            'username': 'valid and very unique',
+            'username': 'u2: valid and very unique',
             'email': 'valid.very.unique@exmaple.com',
             'password': 'junk',
             }
-
         forum_data = {'members': [user_data_1, user_data_2, ],
                       'moderators': [user_data_2, ]}
         request.set_body(json.dumps(forum_data))

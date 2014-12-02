@@ -2229,7 +2229,41 @@ class BaseModelResource(Resource):
                 bundle.obj.delete()
 
     def create_identifier(self, obj):
+        """
+        Creates a single identifier for an object, based on the object's PK.
+        """
         return u"%s.%s.%s" % (obj._meta.app_label, obj._meta.module_name, obj.pk)
+    
+    def create_identifiers(self, obj):
+        """
+        Creates a list of all unique identifiers for an object, in the form:
+        (appname, modelname, (fieldname, identifier))
+        
+        unique_together fields also supported with this format:
+        (appname, modelname, (field1name, id1, field2name:, id2, ...))
+        """
+        ids = set()
+        
+        #normal unique fields
+        for field in obj._meta.fields:
+            if field.unique:
+                obj_id = (obj._meta.app_label, 
+                          obj._meta.module_name, 
+                          (field.name, getattr(obj, field.name)),
+                         )
+                ids.add(obj_id)
+
+        #unique_together fields
+        for combo in obj._meta.unique_together:
+            unique_parts = tuple((fieldname, getattr(obj, fieldname)) for fieldname in combo)
+
+            #start as a list
+            obj_id = (obj._meta.app_label,
+                      obj._meta.module_name, 
+                      unique_parts)
+            ids.add(obj_id)
+            
+        return ids
 
     def save(self, bundle, skip_errors=False):
         self.is_valid(bundle)
@@ -2248,7 +2282,7 @@ class BaseModelResource(Resource):
 
         # Save the main object.
         bundle.obj.save()
-        bundle.objects_saved.add(self.create_identifier(bundle.obj))
+        bundle.objects_saved.update(self.create_identifiers(bundle.obj))
 
         # Now pick up the M2M bits.
         m2m_bundle = self.hydrate_m2m(bundle)
@@ -2301,9 +2335,9 @@ class BaseModelResource(Resource):
 
                 # Before we build the bundle & try saving it, let's make sure we
                 # haven't already saved it.
-                obj_id = self.create_identifier(related_obj)
+                obj_ids = self.create_identifiers(related_obj)
 
-                if obj_id in bundle.objects_saved:
+                if not obj_ids.isdisjoint(bundle.objects_saved):
                     # It's already been saved. We're done here.
                     continue
 
@@ -2364,9 +2398,18 @@ class BaseModelResource(Resource):
 
                 # Before we build the bundle & try saving it, let's make sure we
                 # haven't already saved it.
-                obj_id = self.create_identifier(related_bundle.obj)
+                obj_ids = self.create_identifiers(related_bundle.obj)
 
-                if obj_id in bundle.objects_saved:
+                if not obj_ids.isdisjoint(bundle.objects_saved):
+                    existing_object_ids = list(obj_ids.intersection(bundle.objects_saved))
+                    lookup_fields = list(existing_object_ids[0][2]) #any unique or unique_together should suffice
+                    lookup_filter = dict()
+                    while lookup_fields:
+                        lookup_filter[lookup_fields.pop()] = lookup_fields.pop()
+                    obj = related_resource.obj_get(related_bundle, **lookup_filter)
+                    if obj:
+                        related_objs.append(obj)
+                    
                     # It's already been saved. We're done here.
                     continue
 
