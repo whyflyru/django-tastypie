@@ -365,8 +365,9 @@ class DateField(ApiField):
 
         if value and not hasattr(value, 'year'):
             try:
-                # Try to rip a date/datetime out of it.
-                value = make_aware(parse(value))
+                # Если указать is_dst=None, будет исключение
+                # NonExistentTimeError, при указании даты 1984-04-01
+                value = make_aware(parse(value), is_dst=False)
 
                 if hasattr(value, 'hour'):
                     value = value.date()
