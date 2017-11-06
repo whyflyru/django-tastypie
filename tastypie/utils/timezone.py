@@ -5,10 +5,10 @@ from django.conf import settings
 from django.utils import timezone
 
 
-def make_aware(value):
+def make_aware(value, is_dst=False):
     if settings.USE_TZ and timezone.is_naive(value):
         default_tz = timezone.get_default_timezone()
-        value = timezone.make_aware(value, default_tz)
+        value = timezone.make_aware(value, default_tz, is_dst=is_dst)
     return value
 
 
