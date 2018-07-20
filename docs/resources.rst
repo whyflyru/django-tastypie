@@ -160,7 +160,7 @@ consequences of each approach.
 Accessing The Current Request
 =============================
 
-Being able to change behavior based on the current request is a very commmon
+Being able to change behavior based on the current request is a very common
 need. Virtually anywhere within ``Resource/ModelResource``, if a ``bundle`` is
 available, you can access it using ``bundle.request``. This is useful for
 altering querysets, ensuring headers are present, etc.
@@ -628,6 +628,14 @@ The inner ``Meta`` class allows for class-level configuration of how the
   the ``Meta`` class is instantiated). This especially affects things that
   are date/time related. Please see the :doc:`cookbook` for a way around this.
 
+``abstract``
+------------
+
+  In concrete ``Resource`` and ``ModelResource`` instances, either 
+  ``object_class`` or ``queryset`` is required.
+  If you wish to build an abstract base ``Resource`` class, you can bypass 
+  this requirement by setting ``abstract`` to ``True``.
+
 ``fields``
 ----------
 
@@ -726,11 +734,11 @@ filter the queryset before processing a request::
     from haystack.query import SearchQuerySet
 
     class MyResource(Resource):
-        def build_filters(self, filters=None):
+        def build_filters(self, filters=None, **kwargs):
             if filters is None:
                 filters = {}
 
-            orm_filters = super(MyResource, self).build_filters(filters)
+            orm_filters = super(MyResource, self).build_filters(filters, **kwargs)
 
             if "q" in filters:
                 sqs = SearchQuerySet().auto_query(filters['q'])

@@ -15,11 +15,9 @@ from django.conf.urls import url
 from django.core.exceptions import (
     ObjectDoesNotExist, MultipleObjectsReturned, ValidationError,
 )
-from django.core.urlresolvers import (
-    NoReverseMatch, reverse, Resolver404, get_script_prefix
-)
 from django.core.signals import got_request_exception
 from django.core.exceptions import ImproperlyConfigured
+from django.db.models.fields.related import ForeignKey
 try:
     from django.contrib.gis.db.models.fields import GeometryField
 except (ImproperlyConfigured, ImportError):
@@ -42,6 +40,7 @@ from tastypie.authentication import Authentication
 from tastypie.authorization import ReadOnlyAuthorization
 from tastypie.bundle import Bundle
 from tastypie.cache import NoCache
+from tastypie.compat import NoReverseMatch, reverse, Resolver404, get_script_prefix
 from tastypie.constants import ALL, ALL_WITH_RELATIONS
 from tastypie.exceptions import (
     NotFound, BadRequest, InvalidFilterError, HydrationError, InvalidSortError,
@@ -156,6 +155,7 @@ class DeclarativeMetaclass(type):
         new_class = super(DeclarativeMetaclass, cls).__new__(cls, name, bases, attrs)
         opts = getattr(new_class, 'Meta', None)
         new_class._meta = ResourceOptions(opts)
+        abstract = getattr(new_class._meta, 'abstract', False)
 
         if not getattr(new_class._meta, 'resource_name', None):
             # No ``resource_name`` provided. Attempt to auto-name the resource.
@@ -169,6 +169,11 @@ class DeclarativeMetaclass(type):
                 new_class.base_fields['resource_uri'] = fields.CharField(readonly=True, verbose_name="resource uri")
         elif 'resource_uri' in new_class.base_fields and 'resource_uri' not in attrs:
             del(new_class.base_fields['resource_uri'])
+
+        if abstract and 'resource_uri' not in attrs:
+            # abstract classes don't have resource_uris unless explicitly provided
+            if 'resource_uri' in new_class.base_fields:
+                del(new_class.base_fields['resource_uri'])
 
         for field_name, field_object in new_class.base_fields.items():
             if hasattr(field_object, 'contribute_to_class'):
@@ -968,12 +973,13 @@ class Resource(six.with_metaclass(DeclarativeMetaclass)):
                                 setattr(bundle.obj, field_object.attribute, value.obj)
                             except (ValueError, ObjectDoesNotExist):
                                 bundle.related_objects_to_save[field_object.attribute] = value.obj
+                        # not required, not sent
+                        elif field_object.blank and field_name not in bundle.data:
+                            continue
                         elif field_object.null:
                             if not isinstance(getattr(bundle.obj.__class__, field_object.attribute, None), ReverseOneToOneDescriptor):
                                 # only update if not a reverse one to one field
                                 setattr(bundle.obj, field_object.attribute, value)
-                        elif field_object.blank:
-                            continue
 
         return bundle
 
@@ -1430,7 +1436,7 @@ class Resource(six.with_metaclass(DeclarativeMetaclass)):
         Return ``HttpNoContent`` (204 No Content) if
         ``Meta.always_return_data = False`` (default).
 
-        Return ``HttpAccepted`` (200 OK) if
+        Return ``HttpResponse`` (200 OK) with new data if
         ``Meta.always_return_data = True``.
         """
         deserialized = self.deserialize(request, request.body, format=request.META.get('CONTENT_TYPE', 'application/json'))
@@ -1743,8 +1749,11 @@ class Resource(six.with_metaclass(DeclarativeMetaclass)):
         Returns a serialized list of resources based on the identifiers
         from the URL.
 
-        Calls ``obj_get`` to fetch only the objects requested. This method
-        only responds to HTTP GET.
+        Calls ``obj_get_list`` to fetch only the objects requests in
+        a single query. This method only responds to HTTP GET.
+
+        For backward compatibility the method ``obj_get`` is used if
+        ``obj_get_list`` is not implemented.
 
         Should return a HttpResponse (200 OK).
         """
@@ -1759,14 +1768,39 @@ class Resource(six.with_metaclass(DeclarativeMetaclass)):
         not_found = []
         base_bundle = self.build_bundle(request=request)
 
-        for identifier in obj_identifiers:
-            try:
-                obj = self.obj_get(bundle=base_bundle, **{self._meta.detail_uri_name: identifier})
-                bundle = self.build_bundle(obj=obj, request=request)
-                bundle = self.full_dehydrate(bundle, for_list=True)
-                objects.append(bundle)
-            except (ObjectDoesNotExist, Unauthorized):
-                not_found.append(identifier)
+        # We will try to get a queryset from obj_get_list.
+        queryset = None
+
+        try:
+            queryset = self.obj_get_list(bundle=base_bundle).filter(
+                **{self._meta.detail_uri_name + '__in': obj_identifiers})
+        except NotImplementedError:
+            pass
+
+        if queryset is not None:
+            # Fetch the objects from the queryset to a dictionary.
+            objects_dict = {}
+            for obj in queryset:
+                objects_dict[str(getattr(obj, self._meta.detail_uri_name))] = obj
+
+            # Walk the list of identifiers in order and get the objects or feed the not_found list.
+            for identifier in obj_identifiers:
+                if identifier in objects_dict:
+                    bundle = self.build_bundle(obj=objects_dict[identifier], request=request)
+                    bundle = self.full_dehydrate(bundle, for_list=True)
+                    objects.append(bundle)
+                else:
+                    not_found.append(identifier)
+        else:
+            # Use the old way.
+            for identifier in obj_identifiers:
+                try:
+                    obj = self.obj_get(bundle=base_bundle, **{self._meta.detail_uri_name: identifier})
+                    bundle = self.build_bundle(obj=obj, request=request)
+                    bundle = self.full_dehydrate(bundle, for_list=True)
+                    objects.append(bundle)
+                except (ObjectDoesNotExist, Unauthorized):
+                    not_found.append(identifier)
 
         object_list = {
             self._meta.collection_name: objects,
@@ -1782,8 +1816,17 @@ class Resource(six.with_metaclass(DeclarativeMetaclass)):
 class ModelDeclarativeMetaclass(DeclarativeMetaclass):
     def __new__(cls, name, bases, attrs):
         meta = attrs.get('Meta')
+        if getattr(meta, 'abstract', False):
+            # abstract base classes do nothing on declaration
+            new_class = super(ModelDeclarativeMetaclass, cls).__new__(cls, name, bases, attrs)
+            return new_class
 
-        if meta and hasattr(meta, 'queryset'):
+        # Sanity check: ModelResource needs either a queryset or object_class:
+        if meta and not hasattr(meta, 'queryset') and not hasattr(meta, 'object_class'):
+            msg = "ModelResource (%s) requires Meta.object_class or Meta.queryset"
+            raise ImproperlyConfigured(msg % name)
+
+        if hasattr(meta, 'queryset') and not hasattr(meta, 'object_class'):
             setattr(meta, 'object_class', meta.queryset.model)
 
         new_class = super(ModelDeclarativeMetaclass, cls).__new__(cls, name, bases, attrs)
@@ -1837,8 +1880,13 @@ class BaseModelResource(Resource):
         Given a Django model field, return if it should be included in the
         contributed ApiFields.
         """
+        if isinstance(field, ForeignKey):
+            return True
         # Ignore certain fields (related fields).
-        if getattr(field, 'rel'):
+        if hasattr(field, 'remote_field'):
+            if field.remote_field:
+                return True
+        elif getattr(field, 'rel'):
             return True
 
         return False
@@ -1862,7 +1910,7 @@ class BaseModelResource(Resource):
             result = fields.FloatField
         elif internal_type in ('DecimalField',):
             result = fields.DecimalField
-        elif internal_type in ('IntegerField', 'PositiveIntegerField', 'PositiveSmallIntegerField', 'SmallIntegerField', 'AutoField'):
+        elif internal_type in ('IntegerField', 'PositiveIntegerField', 'PositiveSmallIntegerField', 'SmallIntegerField', 'AutoField', 'BigIntegerField'):
             result = fields.IntegerField
         elif internal_type in ('FileField', 'ImageField'):
             result = fields.FileField
@@ -2027,13 +2075,9 @@ class BaseModelResource(Resource):
 
         qs_filters = {}
 
-        if getattr(self._meta, 'queryset', None) is not None:
-            # Get the possible query terms from the current QuerySet.
-            query_terms = self._meta.queryset.query.query_terms
-        else:
-            query_terms = QUERY_TERMS
+        query_terms = QUERY_TERMS
         if django.VERSION >= (1, 8) and GeometryField:
-            query_terms = query_terms | set(GeometryField.class_lookups.keys())
+            query_terms |= set(GeometryField.class_lookups.keys())
 
         for filter_expr, value in filters.items():
             filter_bits = filter_expr.split(LOOKUP_SEP)
@@ -2247,7 +2291,7 @@ class BaseModelResource(Resource):
         if bundle_detail_data is None or (arg_detail_data is not None and str(bundle_detail_data) != str(arg_detail_data)):
             try:
                 lookup_kwargs = self.lookup_kwargs_with_identifiers(bundle, kwargs)
-            except:
+            except:  # flake8: noqa
                 # if there is trouble hydrating the data, fall back to just
                 # using kwargs by itself (usually it only contains a "pk" key
                 # and this will work fine.

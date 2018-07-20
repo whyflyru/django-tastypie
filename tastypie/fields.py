@@ -128,13 +128,12 @@ class ApiField(object):
                 current_object = getattr(current_object, attr, None)
 
                 if current_object is None:
-                    if self.has_default():
-                        current_object = self._default
+                    if self.null:
                         # Fall out of the loop, given any further attempts at
                         # accesses will fail miserably.
                         break
-                    elif self.null:
-                        current_object = None
+                    elif self.has_default():
+                        current_object = self._default
                         # Fall out of the loop, given any further attempts at
                         # accesses will fail miserably.
                         break
@@ -858,6 +857,7 @@ class ToManyField(RelatedField):
         if the_m2ms is None:
             if not self.null:
                 raise ApiFieldError("The model '%r' has an empty attribute '%s' and doesn't allow a null value." % (previous_obj, attr))
+            return []
 
         if isinstance(the_m2ms, models.Manager):
             the_m2ms = the_m2ms.all()
