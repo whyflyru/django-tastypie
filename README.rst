@@ -7,11 +7,11 @@ django-tastypie
     :alt: Docs
 
 .. image:: https://travis-ci.org/django-tastypie/django-tastypie.svg
-    :target: https://travis-ci.org/django-tastypie/django-tastypie
+    :target: https://travis-ci.org/whyflyru/django-tastypie
     :alt: CI
 
 .. image:: https://coveralls.io/repos/django-tastypie/django-tastypie/badge.svg?service=github
-    :target: https://coveralls.io/github/django-tastypie/django-tastypie
+    :target: https://coveralls.io/github/whyflyru/django-tastypie
     :alt: Code Coverage
 
 .. image:: https://img.shields.io/pypi/v/django-tastypie.svg
