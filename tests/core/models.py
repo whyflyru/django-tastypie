@@ -22,7 +22,7 @@ class Note(models.Model):
     title = models.CharField("The Title", max_length=100)
     slug = models.SlugField()
     content = models.TextField(blank=True)
-    is_active = models.BooleanField(default=True)
+    is_active = models.BooleanField(default=True, blank=True)
     created = models.DateTimeField(default=now)
     updated = models.DateTimeField(default=now)
 
@@ -86,7 +86,7 @@ class AutoNowNote(models.Model):
     title = models.CharField(max_length=100)
     slug = models.SlugField(unique=True)
     content = models.TextField(blank=True)
-    is_active = models.BooleanField(default=True)
+    is_active = models.BooleanField(default=True, blank=True)
     created = models.DateTimeField(auto_now_add=now, null=True)
     updated = models.DateTimeField(auto_now=now)
 
@@ -112,8 +112,12 @@ class Counter(models.Model):
 int_source = count(1)
 
 
+def get_next():
+    return next(int_source)
+
+
 class MyDefaultPKModel(models.Model):
-    id = models.IntegerField(primary_key=True, default=lambda: next(int_source), editable=False)
+    id = models.IntegerField(primary_key=True, default=get_next, editable=False)
     content = models.TextField(blank=True, default='')
 
     class Meta:

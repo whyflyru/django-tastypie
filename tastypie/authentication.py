@@ -10,8 +10,9 @@ from django.conf import settings
 from django.contrib.auth import authenticate
 from django.core.exceptions import ImproperlyConfigured
 from django.middleware.csrf import _sanitize_token, constant_time_compare
-from django.utils.six.moves.urllib.parse import urlparse
 from django.utils.translation import ugettext as _
+
+from six.moves.urllib.parse import urlparse
 
 from tastypie.compat import (
     get_user_model, get_username_field, unsalt_token, is_authenticated
@@ -528,9 +529,9 @@ class OAuthAuthentication(Authentication):
         according to OAuth spec) or fall back to ``GET/POST``.
         """
         auth_params = request.META.get("HTTP_AUTHORIZATION", [])
-        return (self.is_in(auth_params) or
-                self.is_in(request.POST) or
-                self.is_in(request.GET))
+        return (self.is_in(auth_params)
+                or self.is_in(request.POST)
+                or self.is_in(request.GET))
 
     def validate_token(self, request, consumer, token):
         oauth_server, oauth_request = oauth_provider.utils.initialize_server_request(request)
