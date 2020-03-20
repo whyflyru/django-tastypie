@@ -26,7 +26,6 @@ from django.http import HttpRequest, QueryDict, Http404
 from django.test import TestCase
 from django.test.utils import override_settings
 from django.utils import timezone
-from django.utils.encoding import force_text
 
 from tastypie.authentication import BasicAuthentication
 from tastypie.authorization import Authorization
@@ -37,7 +36,7 @@ from tastypie.exceptions import (
     UnsupportedSerializationFormat, UnsupportedDeserializationFormat,
 )
 from tastypie import fields, http
-from tastypie.compat import is_authenticated
+from tastypie.compat import is_authenticated, force_str
 from tastypie.paginator import Paginator
 from tastypie.resources import (
     ALL, ALL_WITH_RELATIONS, convert_post_to_put, convert_post_to_patch,
@@ -860,13 +859,13 @@ class ResourceTestCase(TestCase):
         data = {'hello': 'world'}
         output = basic.create_response(request, data)
         self.assertEqual(output.status_code, 200)
-        self.assertEqual(force_text(output.content), '{"hello": "world"}')
+        self.assertEqual(force_str(output.content), '{"hello": "world"}')
 
         request.GET = {'format': 'xml'}
         data = {'objects': [{'hello': 'world', 'abc': 123}], 'meta': {'page': 1}}
         output = basic.create_response(request, data)
         self.assertEqual(output.status_code, 200)
-        self.assertEqual(force_text(output.content), '<?xml version=\'1.0\' encoding=\'utf-8\'?>\n<response><meta type="hash"><page type="integer">1</page></meta><objects type="list"><object type="hash"><abc type="integer">123</abc><hello>world</hello></object></objects></response>')
+        self.assertEqual(force_str(output.content), '<?xml version=\'1.0\' encoding=\'utf-8\'?>\n<response><meta type="hash"><page type="integer">1</page></meta><objects type="list"><object type="hash"><abc type="integer">123</abc><hello>world</hello></object></objects></response>')
 
     def test_mangled(self):
         mangled = MangledBasicResource()
@@ -889,7 +888,7 @@ class ResourceTestCase(TestCase):
         request.GET = {'format': 'json'}
         request.method = 'GET'
 
-        basic_resource_list = json.loads(force_text(basic.get_list(request).content))['objects']
+        basic_resource_list = json.loads(force_str(basic.get_list(request).content))['objects']
         self.assertEquals(basic_resource_list[0]['name'], 'Daniel')
         self.assertEquals(basic_resource_list[0]['date_joined'], u'2010-03-30T09:00:00')
 
@@ -1144,6 +1143,24 @@ class RequiredFKNoteResource(ModelResource):
 
     class Meta:
         resource_name = 'requiredfknotes'
+        queryset = NoteWithEditor.objects.all()
+        authorization = Authorization()
+
+
+class NoAttributeFKNoteResource(ModelResource):
+    editor = fields.ForeignKey(UserResource, None)
+
+    class Meta:
+        resource_name = 'noattrfknotes'
+        queryset = NoteWithEditor.objects.all()
+        authorization = Authorization()
+
+
+class FunctionAttributeFKNoteResource(ModelResource):
+    editor = fields.ForeignKey(UserResource, lambda bundle: User.objects.first(), null=True)
+
+    class Meta:
+        resource_name = 'fnattrfknotes'
         queryset = NoteWithEditor.objects.all()
         authorization = Authorization()
 
@@ -1522,6 +1539,12 @@ class ModelResourceTestCase(TestCase):
 
         resource_6 = CustomPageNoteResource()
         self.assertEqual(resource_6._meta.paginator_class, CustomPaginator)
+
+        # FK fields with non-string attributes
+        resource_7 = NoAttributeFKNoteResource()
+        self.assertEqual(len(resource_7.fields), 9)
+        resource_8 = FunctionAttributeFKNoteResource()
+        self.assertEqual(len(resource_8.fields), 9)
 
     def test_can_create(self):
         resource_1 = NoteResource()
@@ -2102,12 +2125,17 @@ class ModelResourceTestCase(TestCase):
         resource_4 = AnotherSubjectResource()
         self.assertEqual(resource_4.build_filters(filters={'notes__user__startswith': 'Daniel'}), {'notes__author__startswith': 'Daniel'})
 
-        # Make sure that fields that don't have attributes can't be filtered on.
-        self.assertRaises(InvalidFilterError, resource_4.build_filters, filters={'notes__hello_world': 'News'})
-
         # Make sure build_filters works even on resources without queryset
         resource = NoQuerysetNoteResource()
         self.assertEqual(resource.build_filters(), {})
+
+    def test_build_filters_bad(self):
+        """
+        Test that a nonsensical filter fails validation.
+        """
+        resource = AnotherSubjectResource()
+        # Make sure that fields that don't have attributes can't be filtered on.
+        self.assertRaises(InvalidFilterError, resource.build_filters, filters={'notes__hello_world': 'News'})
 
     def test_custom_build_filters(self):
         """
@@ -2885,6 +2913,25 @@ class ModelResourceTestCase(TestCase):
         new_note = Note.objects.get(slug='cat-is-back-again')
         self.assertEqual(new_note.author, author)
 
+    def test_put_detail_with_always_return(self):
+        # Check for issue #1576
+        resource = AlwaysDataNoteResource()
+        request = HttpRequest()
+        request.GET = {'format': 'json'}
+        resp = resource.get_detail(request, pk=1)
+        self.assertEqual(resp.status_code, 200)
+        resp = json.loads(resp.content.decode('utf-8'))
+
+        request = MockRequest()
+        request.GET = {'format': 'json'}
+        request.method = 'PUT'
+        request.set_body(json.dumps(resp))
+        putresp = resource.put_detail(request, pk=1)
+        self.assertEqual(putresp.status_code, 200)
+        data = json.loads(putresp.content.decode('utf-8'))
+
+        self.assertEqual(set(data.keys()), set(['title', 'slug', 'content', 'is_active', 'created', 'updated', 'id', 'resource_uri']))
+
     def test_put_detail_with_use_in(self):
         new_note = Note.objects.get(slug='another-post')
         new_note.author = User.objects.get(username='johndoe')
@@ -3542,7 +3589,7 @@ class ModelResourceTestCase(TestCase):
         # Try again with ``wrap_view`` for sanity.
         resp = resource.wrap_view('dispatch_detail')(request, pk=1)
         self.assertEqual(resp.status_code, 400)
-        self.assertEqual(force_text(resp.content), '{"error": "JSONP callback name is invalid."}')
+        self.assertEqual(force_str(resp.content), '{"error": "JSONP callback name is invalid."}')
         self.assertEqual(resp['content-type'], 'application/json')
 
         # valid JSONP callback should work
@@ -4808,23 +4855,23 @@ class ModelResourceTestCase(TestCase):
         self.assertEqual(punr._pre_limits, 0)
         # Shouldn't hit the DB yet.
         self.assertEqual(punr._post_limits, 0)
-        self.assertEqual(len(json.loads(force_text(punr.get_list(request=empty_request).content))['objects']), 4)
+        self.assertEqual(len(json.loads(force_str(punr.get_list(request=empty_request).content))['objects']), 4)
 
         # Requests with an Anonymous user get no objects.
         anony_bundle = punr.build_bundle(request=anony_request)
         self.assertEqual(punr.authorized_read_list(punr.get_object_list(anony_request), anony_bundle).count(), 0)
-        self.assertEqual(len(json.loads(force_text(punr.get_list(request=anony_request).content))['objects']), 0)
+        self.assertEqual(len(json.loads(force_str(punr.get_list(request=anony_request).content))['objects']), 0)
 
         # Requests with an authenticated user get all objects for that user
         # that are active.
         authed_bundle = punr.build_bundle(request=authed_request)
         self.assertEqual(punr.authorized_read_list(punr.get_object_list(authed_request), authed_bundle).count(), 2)
-        self.assertEqual(len(json.loads(force_text(punr.get_list(request=authed_request).content))['objects']), 2)
+        self.assertEqual(len(json.loads(force_str(punr.get_list(request=authed_request).content))['objects']), 2)
 
         # Demonstrate that a different user gets different objects.
         authed_bundle_2 = punr.build_bundle(request=authed_request_2)
         self.assertEqual(punr.authorized_read_list(punr.get_object_list(authed_request_2), authed_bundle_2).count(), 2)
-        self.assertEqual(len(json.loads(force_text(punr.get_list(request=authed_request_2).content))['objects']), 2)
+        self.assertEqual(len(json.loads(force_str(punr.get_list(request=authed_request_2).content))['objects']), 2)
         self.assertEqual(list(punr.authorized_read_list(punr.get_object_list(authed_request), authed_bundle).values_list('id', flat=True)), [1, 2])
         self.assertEqual(list(punr.authorized_read_list(punr.get_object_list(authed_request_2), authed_bundle_2).values_list('id', flat=True)), [4, 6])
 
@@ -4844,13 +4891,13 @@ class ModelResourceTestCase(TestCase):
         # Since the objects weren't filtered, we hit everything.
         self.assertEqual(ponr._post_limits, 6)
 
-        self.assertEqual(len(json.loads(force_text(ponr.get_list(request=empty_request).content))['objects']), 2)
+        self.assertEqual(len(json.loads(force_str(ponr.get_list(request=empty_request).content))['objects']), 2)
         self.assertEqual(ponr._pre_limits, 0)
         # Since the objects weren't filtered, we again hit everything.
         self.assertEqual(ponr._post_limits, 6)
 
         empty_request.GET['is_active'] = True
-        self.assertEqual(len(json.loads(force_text(ponr.get_list(request=empty_request).content))['objects']), 2)
+        self.assertEqual(len(json.loads(force_str(ponr.get_list(request=empty_request).content))['objects']), 2)
         self.assertEqual(ponr._pre_limits, 0)
         # This time, the objects were filtered, so we should only iterate over
         # a (hopefully much smaller) subset.
@@ -4974,7 +5021,7 @@ class ModelResourceTestCase(TestCase):
         resource = AlternativeCollectionNameNoteResource()
         request = HttpRequest()
         response = resource.get_list(request)
-        response_data = json.loads(force_text(response.content))
+        response_data = json.loads(force_str(response.content))
         self.assertTrue('alt_objects' in response_data)
 
     def test_collection_name_patch_list(self):

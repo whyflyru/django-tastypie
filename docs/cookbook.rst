@@ -121,7 +121,7 @@ not include a valid ``resource_uri``:
 .. testcode::
 
     # views.py
-    from django.shortcuts import render_to_response
+    from django.shortcuts import render
     from myapp.api.resources import UserResource
 
 
@@ -135,7 +135,7 @@ not include a valid ``resource_uri``:
         user_bundle = res.build_bundle(request=request, obj=user)
         user_json = res.serialize(None, res.full_dehydrate(user_bundle), "application/json")
 
-        return render_to_response("myapp/user_detail.html", {
+        return render(request, "myapp/user_detail.html", {
             # Other things here.
             "user_json": user_json,
         })
@@ -179,7 +179,7 @@ parameter directly to the Resource:
 .. testcode::
 
     # views.py
-    from django.shortcuts import render_to_response
+    from django.shortcuts import render
     from myapp.api.resources import UserResource
 
 
@@ -209,7 +209,7 @@ Example of getting a list of users:
 
         list_json = res.serialize(None, bundles, "application/json")
 
-        return render_to_response('myapp/user_list.html', {
+        return render(request, 'myapp/user_list.html', {
             # Other things here.
             "list_json": list_json,
         })
@@ -397,8 +397,8 @@ One might want to create an API which will require every user to authenticate
 and every user will be working only with objects associated with them. Let's see
 how to implement it for two basic operations: listing and creation of an object.
 
-For listing we want to list only objects for which 'user' field matches
-'request.user'. This could be done by applying a filter in the
+For listing we want to list only objects for which ``user`` field matches
+``request.user``. This could be done by applying a filter in the
 ``authorized_read_list`` method of your resource.
 
 For creating we'd have to wrap ``obj_create`` method of ``ModelResource``. Then the
@@ -466,9 +466,9 @@ values in camelCase instead:
                         new_key = re.sub(r"[a-z]_[a-z]", underscoreToCamel, key)
                         new_dict[new_key] = camelize(value)
                     return new_dict
-                if isinstance(data, (list, tuple)):
-                    for i in range(len(data)):
-                        data[i] = camelize(data[i])
+                if isinstance(data, list):
+                    for i, v in enumerate(data):
+                        data[i] = camelize(v)
                     return data
                 return data
 
@@ -490,9 +490,9 @@ values in camelCase instead:
                         new_key = re.sub(r"[a-z][A-Z]", camelToUnderscore, key)
                         new_dict[new_key] = underscorize(value)
                     return new_dict
-                if isinstance(data, (list, tuple)):
-                    for i in range(len(data)):
-                        data[i] = underscorize(data[i])
+                if isinstance(data, list):
+                    for i, v in enumerate(data):
+                        data[i] = underscorize(v)
                     return data
                 return data
 

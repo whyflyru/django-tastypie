@@ -9,11 +9,10 @@ import traceback
 import warnings
 from wsgiref.handlers import format_date_time
 
-import django
 from django.conf import settings
 from django.conf.urls import url
 from django.core.exceptions import (
-    ObjectDoesNotExist, MultipleObjectsReturned, ValidationError,
+    ObjectDoesNotExist, MultipleObjectsReturned, ValidationError, FieldDoesNotExist
 )
 from django.core.signals import got_request_exception
 from django.core.exceptions import ImproperlyConfigured
@@ -29,12 +28,13 @@ try:
 except ImportError:
     from django.db.models.fields.related_descriptors import\
         ReverseOneToOneDescriptor
-from django.db.models.sql.constants import QUERY_TERMS
+
 from django.http import HttpResponse, HttpResponseNotFound, Http404
-from django.utils import six
 from django.utils.cache import patch_cache_control, patch_vary_headers
 from django.utils.html import escape
 from django.views.decorators.csrf import csrf_exempt
+
+import six
 
 from tastypie.authentication import Authentication
 from tastypie.authorization import ReadOnlyAuthorization
@@ -64,7 +64,7 @@ from tastypie.compat import get_module_name, atomic_decorator
 def sanitize(text):
     # We put the single quotes back, due to their frequent usage in exception
     # messages.
-    return escape(text).replace('&#39;', "'").replace('&quot;', '"')
+    return escape(text).replace('&#39;', "'").replace('&quot;', '"').replace('&#x27;', "'")
 
 
 class ResourceOptions(object):
@@ -2075,10 +2075,6 @@ class BaseModelResource(Resource):
 
         qs_filters = {}
 
-        query_terms = QUERY_TERMS
-        if django.VERSION >= (1, 8) and GeometryField:
-            query_terms |= set(GeometryField.class_lookups.keys())
-
         for filter_expr, value in filters.items():
             filter_bits = filter_expr.split(LOOKUP_SEP)
             field_name = filter_bits.pop(0)
@@ -2088,6 +2084,16 @@ class BaseModelResource(Resource):
                 # It's not a field we know about. Move along citizen.
                 continue
 
+            # Validate filter types other than 'exact' that are supported by the field type
+            try:
+                django_field_name = self.fields[field_name].attribute
+                django_field = self._meta.object_class._meta.get_field(django_field_name)
+                if hasattr(django_field, 'field'):
+                    django_field = django_field.field  # related field
+            except FieldDoesNotExist:
+                raise InvalidFilterError("The '%s' field is not a valid field name" % field_name)
+
+            query_terms = django_field.get_lookups().keys()
             if len(filter_bits) and filter_bits[-1] in query_terms:
                 filter_type = filter_bits.pop()
 
@@ -2251,6 +2257,11 @@ class BaseModelResource(Resource):
         lookup parameters that can find them in the DB
         """
         lookup_kwargs = {}
+
+        # Handle detail_uri_name specially
+        if self._meta.detail_uri_name in kwargs:
+            lookup_kwargs[self._meta.detail_uri_name] = kwargs.pop(self._meta.detail_uri_name)
+
         bundle.obj = self.get_object_list(bundle.request).model()
         # Override data values, we rely on uri identifiers
         bundle.data.update(kwargs)
@@ -2260,10 +2271,6 @@ class BaseModelResource(Resource):
         bundle = self.hydrate(bundle)
 
         for identifier in kwargs:
-            if identifier == self._meta.detail_uri_name:
-                lookup_kwargs[identifier] = kwargs[identifier]
-                continue
-
             field_object = self.fields[identifier]
 
             # Skip readonly or related fields.
@@ -2291,7 +2298,7 @@ class BaseModelResource(Resource):
         if bundle_detail_data is None or (arg_detail_data is not None and str(bundle_detail_data) != str(arg_detail_data)):
             try:
                 lookup_kwargs = self.lookup_kwargs_with_identifiers(bundle, kwargs)
-            except:  # flake8: noqa
+            except:  # noqa
                 # if there is trouble hydrating the data, fall back to just
                 # using kwargs by itself (usually it only contains a "pk" key
                 # and this will work fine.

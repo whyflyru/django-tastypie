@@ -14,7 +14,9 @@ try:
 except ImportError:
     from django.db.models.fields.related_descriptors import\
         ReverseOneToOneDescriptor
-from django.utils import datetime_safe, six
+from django.utils import datetime_safe
+
+import six
 
 from tastypie.bundle import Bundle
 from tastypie.exceptions import ApiFieldError, NotFound
@@ -741,7 +743,7 @@ class ToOneField(RelatedField):
 
     def contribute_to_class(self, cls, name):
         super(ToOneField, self).contribute_to_class(cls, name)
-        if not self.related_name:
+        if not self.related_name and isinstance(self.attribute, six.string_types):
             related_field = getattr(self._resource._meta.object_class, self.attribute, None)
             if isinstance(related_field, ReverseOneToOneDescriptor):
                 # This is the case when we are writing to a reverse one to one field.
